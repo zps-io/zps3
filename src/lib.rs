@@ -32,11 +32,13 @@ impl Version {
         }
     }
 
-    pub fn from(version: &str) -> Result<Version, Error> {
-        let parts: Vec<&str> = version.split(":").collect();
+    pub fn from<S: Into<String>>(version: S) -> Result<Version, Error> {
+        let version_into = version.into();
+
+        let parts: Vec<&str> = version_into.split(":").collect();
 
         if parts.len() < 1 {
-            return Err(anyhow!("invalid version string: {}", version));
+            return Err(anyhow!("invalid version string: {}", version_into));
         }
 
         let semver = semver::Version::parse(parts[0])?;
@@ -149,13 +151,15 @@ impl Requirement {
         }
     }
 
-    pub fn from_simple(requirement: &str) -> Result<Requirement, Error> {
-        let parts: Vec<&str> = requirement.split("@").collect();
+    pub fn from_simple<S: Into<String>>(requirement: S) -> Result<Requirement, Error> {
+        let requirement_into = requirement.into();
+
+        let parts: Vec<&str> = requirement_into.split("@").collect();
 
         if parts.len() < 2 {
             return Ok(
                 Requirement{
-                    name: String::from(requirement),
+                    name: requirement_into,
                     method: Method::Depends,
                     comparator: Comparator::ANY,
                     version: None
