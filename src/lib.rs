@@ -338,6 +338,32 @@ impl Package {
             self.name, self.version, self.os, self.arch
         )
     }
+
+    fn satisfies(&self, req: Requirement) -> bool {
+        if self.name != req.name {
+            return false;
+        }
+
+        match req.comparator {
+            Comparator::ANY => true,
+            Comparator::EXQ => match req.version {
+                Some(v) => self.version.exq(&v),
+                None => false,
+            },
+            Comparator::GTE => match req.version {
+                Some(v) => self.version >= v,
+                None => false,
+            },
+            Comparator::EQ => match req.version {
+                Some(v) => self.version == v,
+                None => false,
+            },
+            Comparator::LTE => match req.version {
+                Some(v) => self.version <= v,
+                None => false,
+            },
+        }
+    }
 }
 
 impl Ord for Package {
@@ -583,5 +609,58 @@ mod tests {
                 "snarf@1.2.4:20200515T194203Z",
             ]
         )
+    }
+
+    #[test]
+    fn test_package_satisfies() {
+        let snarf = Package::new(
+            String::from("snarf"),
+            Version::from("1.3.4:20200415T194203Z").unwrap(),
+            String::from("zps.io"),
+            OS::Linux,
+            Arch::X8664,
+            String::from("snarfing pretty hard"),
+            String::from("snarfing pretty hard"),
+        );
+
+        assert_eq!(
+            true,
+            snarf.satisfies(Requirement {
+                name: "snarf".to_string(),
+                method: RequirementMethod::Depends,
+                comparator: Comparator::ANY,
+                version: None
+            })
+        );
+
+        assert_eq!(
+            false,
+            snarf.satisfies(Requirement {
+                name: "snarf".to_string(),
+                method: RequirementMethod::Depends,
+                comparator: Comparator::EXQ,
+                version: Some(Version::from("1.3.4:20200515T194203Z").unwrap())
+            })
+        );
+
+        assert_eq!(
+            true,
+            snarf.satisfies(Requirement {
+                name: "snarf".to_string(),
+                method: RequirementMethod::Depends,
+                comparator: Comparator::GTE,
+                version: Some(Version::from("1.3.2:20200515T194203Z").unwrap())
+            })
+        );
+
+        assert_eq!(
+            true,
+            snarf.satisfies(Requirement {
+                name: "snarf".to_string(),
+                method: RequirementMethod::Depends,
+                comparator: Comparator::LTE,
+                version: Some(Version::from("1.3.5:20200515T194203Z").unwrap())
+            })
+        );
     }
 }
