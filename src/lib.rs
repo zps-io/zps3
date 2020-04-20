@@ -14,6 +14,8 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Display;
 
+mod platform;
+
 trait Exq {
     fn exq(&self, other: &Self) -> bool;
 }
@@ -53,15 +55,8 @@ impl Version {
 
     pub fn to_string(&self) -> String {
         match self.time {
-            None => format!(
-                "{}",
-                self.semver.to_string()
-            ),
-            Some(t) => format!(
-                "{}:{}",
-                self.semver.to_string(),
-                t.format("%Y%m%dT%H%M%SZ")
-            )
+            None => format!("{}", self.semver.to_string()),
+            Some(t) => format!("{}:{}", self.semver.to_string(), t.format("%Y%m%dT%H%M%SZ")),
         }
     }
 }
@@ -77,19 +72,19 @@ impl Exq for Version {
 impl Ord for Version {
     fn cmp(&self, other: &Self) -> Ordering {
         if self.semver > other.semver {
-            return Ordering::Greater
+            return Ordering::Greater;
         }
 
         if self.semver < other.semver {
-            return Ordering::Less
+            return Ordering::Less;
         }
 
         if self.time > other.time {
-            return Ordering::Greater
+            return Ordering::Greater;
         }
 
         if self.time < other.time {
-            return Ordering::Less
+            return Ordering::Less;
         }
 
         Ordering::Equal
@@ -108,18 +103,13 @@ impl PartialEq for Version {
     }
 }
 
+#[derive(PartialEq)]
 enum Comparator {
     ANY,
     GTE,
     LTE,
     EQ,
-    EXQ
-}
-
-enum Method {
-    Depends,
-    Provides,
-    Conflicts
+    EXQ,
 }
 
 impl Display for Comparator {
@@ -129,25 +119,37 @@ impl Display for Comparator {
             Comparator::GTE => write!(f, "{}", String::from("GTE")),
             Comparator::LTE => write!(f, "{}", String::from("LTE")),
             Comparator::EQ => write!(f, "{}", String::from("EQ")),
-            Comparator::EXQ => write!(f, "{}", String::from("EXQ"))
+            Comparator::EXQ => write!(f, "{}", String::from("EXQ")),
         }
     }
 }
 
+#[derive(PartialEq)]
+enum RequirementMethod {
+    Depends,
+    Provides,
+    Conflicts,
+}
+
 struct Requirement {
     name: String,
-    method: Method,
+    method: RequirementMethod,
     comparator: Comparator,
-    version: Option<Version>
+    version: Option<Version>,
 }
 
 impl Requirement {
-    pub fn new(name: String, method: Method, comparator: Comparator, version: Version) -> Requirement {
+    pub fn new(
+        name: String,
+        method: RequirementMethod,
+        comparator: Comparator,
+        version: Option<Version>,
+    ) -> Requirement {
         Requirement {
             name,
             method,
             comparator,
-            version: Some(version)
+            version,
         }
     }
 
@@ -157,32 +159,101 @@ impl Requirement {
         let parts: Vec<&str> = requirement_into.split("@").collect();
 
         if parts.len() < 2 {
-            return Ok(
-                Requirement{
-                    name: requirement_into,
-                    method: Method::Depends,
-                    comparator: Comparator::ANY,
-                    version: None
-                }
-            )
+            return Ok(Requirement {
+                name: requirement_into,
+                method: RequirementMethod::Depends,
+                comparator: Comparator::ANY,
+                version: None,
+            });
         }
 
         let version = Version::from(parts[1])?;
 
         match version.time {
-            None => Ok(Requirement{
+            None => Ok(Requirement {
                 name: String::from(parts[0]),
-                method: Method::Depends,
+                method: RequirementMethod::Depends,
                 comparator: Comparator::EQ,
-                version: Some(version)
+                version: Some(version),
             }),
-            Some(_) => Ok(Requirement{
+            Some(_) => Ok(Requirement {
                 name: String::from(parts[0]),
-                method: Method::Depends,
+                method: RequirementMethod::Depends,
                 comparator: Comparator::EXQ,
-                version: Some(version)
-            })
+                version: Some(version),
+            }),
         }
+    }
+}
+
+#[derive(PartialEq, Debug)]
+enum OperationMethod {
+    Install,
+    Remove,
+    NoOp,
+}
+
+#[derive(PartialEq, Debug)]
+enum RequestMethod {
+    Install,
+    Remove,
+}
+
+impl Display for OperationMethod {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            OperationMethod::Install => write!(f, "{}", String::from("install")),
+            OperationMethod::Remove => write!(f, "{}", String::from("remove")),
+            OperationMethod::NoOp => write!(f, "{}", String::from("noop")),
+        }
+    }
+}
+
+impl Display for RequestMethod {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            RequestMethod::Install => write!(f, "{}", String::from("install")),
+            RequestMethod::Remove => write!(f, "{}", String::from("remove")),
+        }
+    }
+}
+
+struct Job {
+    method: RequestMethod,
+    req: Requirement,
+}
+
+impl Job {
+    pub fn new(method: RequestMethod, req: Requirement) -> Job {
+        Job { method, req }
+    }
+}
+
+struct Request {
+    jobs: Vec<Job>,
+}
+
+impl Request {
+    pub fn new() -> Request {
+        Request {
+            jobs: Vec::default(),
+        }
+    }
+
+    fn install(&mut self, req: Requirement) -> &mut Self {
+        self.jobs.push(Job {
+            method: RequestMethod::Install,
+            req,
+        });
+        self
+    }
+
+    fn remove(&mut self, req: Requirement) -> &mut Self {
+        self.jobs.push(Job {
+            method: RequestMethod::Remove,
+            req,
+        });
+        self
     }
 }
 
@@ -238,7 +309,7 @@ mod tests {
 
     #[test]
     fn test_version_ordering() -> Result<(), Error> {
-        let v1 =  Version::from("3.2.1:20200515T194203Z")?;
+        let v1 = Version::from("3.2.1:20200515T194203Z")?;
         let v2 = Version::from("3.2.1:20200415T194203Z")?;
 
         let v3 = Version::from("3.0.1:20200415T194203Z")?;
@@ -258,7 +329,10 @@ mod tests {
         let req_long = Requirement::from_simple(long)?;
         assert_eq!("zps", req_long.name);
         assert_eq!(Comparator::EXQ.to_string(), req_long.comparator.to_string());
-        assert_eq!(req_long.version.unwrap().to_string(), "3.2.1:20200415T194203Z");
+        assert_eq!(
+            req_long.version.unwrap().to_string(),
+            "3.2.1:20200415T194203Z"
+        );
 
         let req_short = Requirement::from_simple(short)?;
         assert_eq!("zps", req_short.name);
@@ -271,5 +345,38 @@ mod tests {
         assert_eq!(req_name.version, None);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_request() {
+        let mut req = Request::new();
+
+        req.install(Requirement::new(
+            String::from("zps"),
+            RequirementMethod::Depends,
+            Comparator::ANY,
+            None,
+        ));
+
+        req.remove(Requirement::new(
+            String::from("apt"),
+            RequirementMethod::Depends,
+            Comparator::ANY,
+            None,
+        ));
+
+        for (index, job) in req.jobs.iter().enumerate() {
+            match index {
+                0 => {
+                    assert_eq!(job.method, RequestMethod::Install);
+                    assert_eq!(job.req.name, String::from("zps"));
+                }
+                1 => {
+                    assert_eq!(job.method, RequestMethod::Remove);
+                    assert_eq!(job.req.name, String::from("apt"));
+                }
+                _ => (),
+            }
+        }
     }
 }
