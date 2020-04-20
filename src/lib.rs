@@ -8,13 +8,15 @@
  * Copyright 2020 Zachary Schneider
  */
 
-use anyhow::*;
-use chrono::{DateTime, TimeZone, Utc};
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Display;
 
+use anyhow::*;
+use chrono::{DateTime, TimeZone, Utc};
+
 mod platform;
+use platform::*;
 
 trait Exq {
     fn exq(&self, other: &Self) -> bool;
@@ -57,6 +59,20 @@ impl Version {
         match self.time {
             None => format!("{}", self.semver.to_string()),
             Some(t) => format!("{}:{}", self.semver.to_string(), t.format("%Y%m%dT%H%M%SZ")),
+        }
+    }
+}
+
+impl Display for Version {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.time {
+            None => write!(f, "{}", self.semver.to_string()),
+            Some(t) => write!(
+                f,
+                "{}:{}",
+                self.semver.to_string(),
+                t.format("%Y%m%dT%H%M%SZ")
+            ),
         }
     }
 }
@@ -193,12 +209,6 @@ enum OperationMethod {
     NoOp,
 }
 
-#[derive(PartialEq, Debug)]
-enum RequestMethod {
-    Install,
-    Remove,
-}
-
 impl Display for OperationMethod {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -207,6 +217,24 @@ impl Display for OperationMethod {
             OperationMethod::NoOp => write!(f, "{}", String::from("noop")),
         }
     }
+}
+
+// TODO requires graph node
+struct Operation {
+    method: OperationMethod,
+    package: Package,
+}
+
+impl Operation {
+    pub fn new(method: OperationMethod, package: Package) -> Operation {
+        Operation { method, package }
+    }
+}
+
+#[derive(PartialEq, Debug)]
+enum RequestMethod {
+    Install,
+    Remove,
 }
 
 impl Display for RequestMethod {
@@ -254,6 +282,108 @@ impl Request {
             req,
         });
         self
+    }
+}
+
+struct Package {
+    name: String,
+    version: Version,
+    publisher: String,
+
+    os: OS,
+    arch: Arch,
+    summary: String,
+    description: String,
+
+    requirements: Vec<Requirement>,
+
+    channels: Vec<String>,
+
+    location: i32,
+    priority: i32,
+}
+
+impl Package {
+    pub fn new(
+        name: String,
+        version: Version,
+        publisher: String,
+        os: OS,
+        arch: Arch,
+        summary: String,
+        description: String,
+    ) -> Package {
+        Package {
+            name,
+            version,
+            publisher,
+            os,
+            arch,
+            summary,
+            description,
+            requirements: Vec::default(),
+            channels: Vec::default(),
+            location: 0,
+            priority: 10,
+        }
+    }
+
+    fn id(&self) -> String {
+        format!("{}@{}", self.name, self.version)
+    }
+
+    fn file_name(&self) -> String {
+        format!(
+            "{}@{}-{}-{}.zpkg",
+            self.name, self.version, self.os, self.arch
+        )
+    }
+}
+
+impl Ord for Package {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.name > other.name {
+            return Ordering::Greater;
+        }
+
+        if self.name < other.name {
+            return Ordering::Less;
+        }
+
+        // Lower is higher for priority
+        if self.priority > other.priority {
+            return Ordering::Less;
+        }
+
+        if self.priority < other.priority {
+            return Ordering::Greater;
+        }
+
+        if self.version > other.version {
+            return Ordering::Greater;
+        }
+
+        if self.version < other.version {
+            return Ordering::Less;
+        }
+
+        Ordering::Equal
+    }
+}
+
+impl PartialOrd for Package {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Eq for Package {}
+
+impl PartialEq for Package {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.version.to_string() == other.version.to_string()
+            && self.priority == other.priority
     }
 }
 
@@ -378,5 +508,80 @@ mod tests {
                 _ => (),
             }
         }
+    }
+
+    #[test]
+    fn test_package_sort() {
+        let mut packages: Vec<Package> = Vec::new();
+
+        let snarf13 = Package::new(
+            String::from("snarf"),
+            Version::from("1.3.4:20200415T194203Z").unwrap(),
+            String::from("zps.io"),
+            OS::Linux,
+            Arch::X8664,
+            String::from("snarfing pretty hard"),
+            String::from("snarfing pretty hard"),
+        );
+        packages.push(snarf13);
+
+        let snarf12 = Package::new(
+            String::from("snarf"),
+            Version::from("1.2.4:20200515T194203Z").unwrap(),
+            String::from("zps.io"),
+            OS::Linux,
+            Arch::X8664,
+            String::from("snarfing pretty hard"),
+            String::from("snarfing pretty hard"),
+        );
+        packages.push(snarf12);
+
+        let mut snarf_prio = Package::new(
+            String::from("snarf"),
+            Version::from("1.2.4:20200515T194203Z").unwrap(),
+            String::from("zps.io"),
+            OS::Linux,
+            Arch::X8664,
+            String::from("snarfing pretty hard"),
+            String::from("snarfing pretty hard"),
+        );
+        snarf_prio.priority = 2;
+        packages.push(snarf_prio);
+
+        let beef10 = Package::new(
+            String::from("beef"),
+            Version::from("1.0.0:20200615T194203Z").unwrap(),
+            String::from("zps.io"),
+            OS::Linux,
+            Arch::X8664,
+            String::from("snarfing pretty hard"),
+            String::from("snarfing pretty hard"),
+        );
+        packages.push(beef10);
+
+        let beef11 = Package::new(
+            String::from("beef"),
+            Version::from("1.0.0:20200515T194203Z").unwrap(),
+            String::from("zps.io"),
+            OS::Linux,
+            Arch::X8664,
+            String::from("snarfing pretty hard"),
+            String::from("snarfing pretty hard"),
+        );
+        packages.push(beef11);
+
+        packages.sort();
+
+        let names: Vec<String> = packages.iter().map(|pkg| pkg.id()).collect();
+        assert_eq!(
+            names,
+            [
+                "beef@1.0.0:20200515T194203Z",
+                "beef@1.0.0:20200615T194203Z",
+                "snarf@1.2.4:20200515T194203Z",
+                "snarf@1.3.4:20200415T194203Z",
+                "snarf@1.2.4:20200515T194203Z",
+            ]
+        )
     }
 }

@@ -14,21 +14,21 @@ use std::fmt::Display;
 use enum_iterator::IntoEnumIterator;
 
 #[derive(Copy, Clone, Debug, PartialEq, IntoEnumIterator)]
-enum OS {
+pub enum OS {
     Any,
     Darwin,
     Linux,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, IntoEnumIterator)]
-enum Arch {
+pub enum Arch {
     Any,
     Arm64,
     X8664,
 }
 
 #[derive(Clone, Copy, Debug)]
-struct OSArch {
+pub struct OSArch {
     os: OS,
     arch: Arch,
 }
