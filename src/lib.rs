@@ -14,9 +14,13 @@ use std::fmt::Display;
 
 use anyhow::*;
 use chrono::{DateTime, TimeZone, Utc};
+use url::Url;
 
 mod platform;
 use platform::*;
+use std::collections::{HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
+use std::iter::FromIterator;
 
 trait Exq {
     fn exq(&self, other: &Self) -> bool;
@@ -119,7 +123,7 @@ impl PartialEq for Version {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 enum Comparator {
     ANY,
     GTE,
@@ -140,13 +144,14 @@ impl Display for Comparator {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 enum RequirementMethod {
     Depends,
     Provides,
     Conflicts,
 }
 
+#[derive(Clone)]
 struct Requirement {
     name: String,
     method: RequirementMethod,
@@ -285,6 +290,7 @@ impl Request {
     }
 }
 
+#[derive(Clone)]
 struct Package {
     name: String,
     version: Version,
@@ -295,9 +301,9 @@ struct Package {
     summary: String,
     description: String,
 
-    requirements: Vec<Requirement>,
+    requirements: Vec<Box<Requirement>>,
 
-    channels: Vec<String>,
+    channels: Vec<Box<String>>,
 
     location: i32,
     priority: i32,
@@ -410,6 +416,166 @@ impl PartialEq for Package {
         self.name == other.name
             && self.version.to_string() == other.version.to_string()
             && self.priority == other.priority
+    }
+}
+
+impl Hash for Package {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id().hash(state)
+    }
+}
+
+#[derive(Clone)]
+struct Repo {
+    uri: Url,
+
+    priority: u32,
+    enabled: bool,
+    updated: DateTime<Utc>,
+
+    packages: HashSet<Package>,
+
+    channels: HashSet<String>,
+}
+
+impl Repo {
+    pub fn new(uri: Url, priority: u32, enabled: bool) -> Repo {
+        Repo {
+            uri,
+            priority,
+            enabled,
+            updated: Utc::now(),
+            packages: HashSet::default(),
+            channels: HashSet::default(),
+        }
+    }
+
+    fn add(&mut self, packages: &[Package]) -> Vec<Package> {
+        let mut rejects: Vec<Package> = Vec::new();
+
+        for pkg in packages {
+            if !self.packages.contains(&pkg) {
+                self.packages.insert(pkg.clone());
+            } else {
+                rejects.push(pkg.clone());
+            }
+        }
+
+        rejects.sort();
+        rejects
+    }
+
+    fn remove(&mut self, package: &Package) {
+        if self.packages.contains(package) {
+            self.packages.remove(package);
+        }
+    }
+
+    fn contains(self, package: &Package) -> bool {
+        self.packages.contains(package)
+    }
+
+    fn contents_for_name(&mut self, name: String) -> Vec<Package> {
+        self.packages
+            .iter()
+            .filter(|p| p.name == name)
+            .map(|v| v.clone())
+            .collect()
+    }
+
+    fn prune(&mut self, count: i32) -> Option<Vec<Package>> {
+        let mut pruned: Vec<Package> = Vec::new();
+        let mut result: Vec<Package> = Vec::new();
+        let mut names: Vec<String> = self.packages.iter().map(|p| p.name.clone()).collect();
+
+        names.sort();
+        names.dedup();
+
+        for name in names {
+            let packages = self.contents_for_name(name);
+
+            let mut current: VecDeque<Package> = VecDeque::from_iter(packages);
+
+            if current.len() > count as usize {
+                let offset = current.len() - count as usize;
+
+                for _ in 0..offset {
+                    pruned.push(current.pop_front().unwrap());
+                }
+            }
+
+            result.append(Vec::from(current).as_mut())
+        }
+
+        self.packages = HashSet::from_iter(result);
+
+        if pruned.len() == 0 {
+            return None;
+        }
+
+        Some(pruned)
+    }
+
+    fn load(&mut self, packages: Vec<Package>) {
+        for pkg in packages {
+            self.packages.insert(pkg);
+        }
+    }
+
+    fn contents(self) -> Vec<Package> {
+        let mut filtered: Vec<Package> = Vec::new();
+
+        for pkg in self.packages {
+            if self.channels.len() > 0 {
+                for ch in &self.channels {
+                    if pkg.channels.iter().any(|c| c.as_str() == ch) {
+                        filtered.push(pkg.clone())
+                    }
+                }
+            } else {
+                filtered.push(pkg.clone())
+            }
+        }
+
+        filtered.sort();
+        filtered
+    }
+}
+
+impl Ord for Repo {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Lower is higher for priority
+        if self.priority > other.priority {
+            return Ordering::Less;
+        }
+
+        if self.priority < other.priority {
+            return Ordering::Greater;
+        }
+
+        if self.uri.to_string() > other.uri.to_string() {
+            return Ordering::Greater;
+        }
+
+        if self.uri.to_string() < self.uri.to_string() {
+            return Ordering::Less;
+        }
+
+        Ordering::Equal
+    }
+}
+
+impl PartialOrd for Repo {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Eq for Repo {}
+
+impl PartialEq for Repo {
+    fn eq(&self, other: &Self) -> bool {
+        self.uri.to_string() == other.uri.to_string() && self.priority == other.priority
     }
 }
 
@@ -662,5 +828,85 @@ mod tests {
                 version: Some(Version::from("1.3.5:20200515T194203Z").unwrap())
             })
         );
+    }
+
+    #[test]
+    fn test_repo_create() {
+        let mut core = Repo::new(Url::parse("s3://somepath/zps.io/core").unwrap(), 8, true);
+
+        let mut util = Repo::new(Url::parse("s3://somepath/zps.io/util").unwrap(), 10, true);
+
+        let mut repos: Vec<Repo> = vec![core, util];
+
+        repos.sort();
+        repos.reverse();
+
+        assert_eq!(
+            "s3://somepath/zps.io/core",
+            repos.get(0).unwrap().uri.to_string()
+        );
+        assert_eq!(
+            "s3://somepath/zps.io/util",
+            repos.get(1).unwrap().uri.to_string()
+        );
+    }
+
+    #[test]
+    fn test_repo_contents() {
+        let mut repo = Repo::new(Url::parse("s3://somepath/zps.io/core").unwrap(), 8, true);
+
+        let zps = Package::new(
+            String::from("zps"),
+            Version::from("1.3.4:20200415T194203Z").unwrap(),
+            String::from("zps.io"),
+            OS::Linux,
+            Arch::X8664,
+            String::from("zps the last word"),
+            String::from("zps the last word"),
+        );
+
+        let zps1 = Package::new(
+            String::from("zps"),
+            Version::from("1.3.5:20200415T194203Z").unwrap(),
+            String::from("zps.io"),
+            OS::Linux,
+            Arch::X8664,
+            String::from("zps the last word"),
+            String::from("zps the last word"),
+        );
+
+        let snarf = Package::new(
+            String::from("snarf"),
+            Version::from("1.0.0:20200415T194203Z").unwrap(),
+            String::from("zps.io"),
+            OS::Linux,
+            Arch::X8664,
+            String::from("snarf the man"),
+            String::from("snarf the man"),
+        );
+
+        let snarf1 = Package::new(
+            String::from("snarf"),
+            Version::from("1.0.1:20200415T194203Z").unwrap(),
+            String::from("zps.io"),
+            OS::Linux,
+            Arch::X8664,
+            String::from("snarf the man"),
+            String::from("snarf the man"),
+        );
+
+        repo.load(vec![zps, zps1, snarf, snarf1]);
+
+        let contents = repo.contents();
+        assert_eq!(
+            "snarf@1.0.0:20200415T194203Z",
+            contents.get(0).unwrap().id()
+        );
+        assert_eq!(
+            "snarf@1.0.1:20200415T194203Z",
+            contents.get(1).unwrap().id()
+        );
+        assert_eq!("zps@1.3.4:20200415T194203Z", contents.get(2).unwrap().id());
+        assert_eq!("zps@1.3.5:20200415T194203Z", contents.get(3).unwrap().id());
     }
 }
