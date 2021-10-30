@@ -11,19 +11,26 @@
 use std::fmt;
 use std::fmt::Display;
 
-use enum_iterator::IntoEnumIterator;
+use strum::IntoEnumIterator;
+use strum_macros::{EnumIter, EnumString};
 
-#[derive(Copy, Clone, Debug, PartialEq, IntoEnumIterator)]
+#[derive(Copy, Clone, Debug, PartialEq, EnumIter, EnumString)]
 pub enum OS {
+    #[strum(serialize = "any")]
     Any,
+    #[strum(serialize = "darwin")]
     Darwin,
+    #[strum(serialize = "linux")]
     Linux,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, IntoEnumIterator)]
+#[derive(Copy, Clone, Debug, PartialEq, EnumIter, EnumString)]
 pub enum Arch {
+    #[strum(serialize = "any")]
     Any,
+    #[strum(serialize = "arm64")]
     Arm64,
+    #[strum(serialize = "x86_64")]
     X8664,
 }
 
@@ -74,7 +81,7 @@ impl OSArch {
         let arch = match std::env::consts::ARCH {
             "aarch64" => Arch::Arm64,
             "x86_64" => Arch::X8664,
-            _ => panic!("Unsupported OS"),
+            _ => panic!("Unsupported Arch"),
         };
 
         OSArch { os, arch }
@@ -83,8 +90,8 @@ impl OSArch {
     pub fn platforms() -> Vec<OSArch> {
         let mut platforms: Vec<OSArch> = Vec::new();
 
-        for os in OS::into_enum_iter() {
-            for arch in Arch::into_enum_iter() {
+        for os in OS::iter() {
+            for arch in Arch::iter() {
                 platforms.push(OSArch { os, arch })
             }
         }
@@ -110,6 +117,14 @@ impl OSArch {
         });
 
         platforms
+    }
+
+    pub fn arch(&self) -> Arch {
+        self.arch
+    }
+
+    pub fn os(&self) -> OS {
+        self.os
     }
 }
 

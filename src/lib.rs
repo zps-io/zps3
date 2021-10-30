@@ -8,19 +8,39 @@
  * Copyright 2020 Zachary Schneider
  */
 
+mod action;
+pub mod app;
+pub mod config;
+pub mod console;
+mod db;
+mod platform;
+mod provider;
+pub mod zpkg;
+pub mod fs;
+pub mod io;
+
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Display;
+use std::str::FromStr;
 
 use anyhow::*;
 use chrono::{DateTime, TimeZone, Utc};
 use url::Url;
 
-mod platform;
 use platform::*;
 use std::collections::{HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::iter::FromIterator;
+use serde::Deserialize;
+use crate::action::Manifest;
+
+pub trait Emitter {
+    fn on<F, T>(&mut self, event: &str, callback: F) -> String
+        where
+                for<'de> T: Deserialize<'de>,
+                F: Fn(T) + 'static + Sync + Send;
+}
 
 trait Exq {
     fn exq(&self, other: &Self) -> bool;
@@ -54,6 +74,8 @@ impl Version {
         let mut time = None;
         if parts.len() == 2 {
             time = Some(Utc.datetime_from_str(parts[1], "%Y%m%dT%H%M%SZ")?);
+        } else {
+            time = Some(Utc::now())
         }
 
         Ok(Version { semver, time })
@@ -333,6 +355,22 @@ impl Package {
             priority: 10,
         }
     }
+    
+    pub fn from(manifest: Manifest) -> Result<Package, Error> {
+        Ok(Package {
+            name: manifest.zpkg.name,
+            version: Version::from(manifest.zpkg.version)?,
+            publisher: manifest.zpkg.publisher,
+            os: OS::from_str(&manifest.zpkg.os)?,
+            arch: Arch::from_str(&manifest.zpkg.arch)?,
+            summary: manifest.zpkg.summary,
+            description: manifest.zpkg.description,
+            requirements: vec![],
+            channels: vec![],
+            location: 0,
+            priority: 10
+        })
+    }
 
     fn id(&self) -> String {
         format!("{}@{}", self.name, self.version)
@@ -577,6 +615,15 @@ impl PartialEq for Repo {
     fn eq(&self, other: &Self) -> bool {
         self.uri.to_string() == other.uri.to_string() && self.priority == other.priority
     }
+}
+
+pub enum Phase {
+    Install,
+    Remove,
+    Package,
+    Configure,
+    NOOP,
+    Validate
 }
 
 #[cfg(test)]
@@ -832,9 +879,9 @@ mod tests {
 
     #[test]
     fn test_repo_create() {
-        let mut core = Repo::new(Url::parse("s3://somepath/zps.io/core").unwrap(), 8, true);
+        let core = Repo::new(Url::parse("s3://somepath/zps.io/core").unwrap(), 8, true);
 
-        let mut util = Repo::new(Url::parse("s3://somepath/zps.io/util").unwrap(), 10, true);
+        let util = Repo::new(Url::parse("s3://somepath/zps.io/util").unwrap(), 10, true);
 
         let mut repos: Vec<Repo> = vec![core, util];
 
